@@ -1,0 +1,259 @@
+---
+title: "Colocalization"
+author: "Aili Toyli"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##Setup
+```{r}
+#set working directory
+setwd("C:/Users/agtoy/Desktop/URIP/GWAS Results")
+
+#load in tidyverse
+library(tidyverse)
+```
+
+## Read in data
+```{r}
+library(data.table)
+ad_gwas<- fread("gwas-association-AD.tsv", fill = TRUE, quote = "")
+
+#save only chromosome numbers and position
+ad_sig <- data.frame(chr = as.numeric(ad_gwas$CHR_POS), pos = as.numeric(ad_gwas$`REPORTED GENE(S)`), snp = ad_gwas$MERGED, database_trait = ad_gwas$INITIAL_SAMPLE_SIZE, p_value1 = ad_gwas$PVALUE_MLOG)
+
+#save as new file
+write.table(ad_sig, "ad_sig_snps.csv", row.names = FALSE, sep = ',')
+
+
+```
+
+
+## Function to find colocalization with CVD GWAS results
+```{r}
+colocal <- function(filename, cvd_type, ref_results){
+  
+  cvd <- read.table(filename, header = T)
+
+#filter to only include snps with p-values below 10^-5
+cvd <- cvd %>% filter(p_value < 10^-6)
+
+# Perform filtering using dplyr
+filtered_ad_sig <- ad_sig %>%
+  inner_join(cvd, by = c("chr" = "chromosome")) %>% 
+  filter((pos - 50000) < base_pair_location & base_pair_location < (pos + 50000)) %>% 
+  distinct(chr, pos, base_pair_location, .keep_all = TRUE) %>% 
+  select(c(chr, pos, snp, p_value1, database_trait, Name, base_pair_location, p_value))
+
+#add label for cvd subtype
+if (nrow(filtered_ad_sig) > 0) {
+  filtered_ad_sig$ukb_trait <- cvd_type
+} else {
+  message("filtered_ad_sig is empty; no assignment made.")
+}
+
+
+#write to results file
+write.table(filtered_ad_sig, "ad_cvd_gwas_colocalization.csv", sep = ",", col.names = FALSE, row.names = FALSE, append = TRUE)
+}
+```
+
+
+```{r}
+# Run for all cvd subtypes
+colocal('afib_gwas.tsv', 'afib')
+colocal('albbb_gwas.tsv', 'albbb')
+colocal('ami_gwas.tsv', 'ami')
+colocal('angina_gwas.tsv', 'angina')
+colocal('ci1_gwas.tsv', 'ci')
+colocal('ci2_gwas.tsv', 'ci')
+colocal('hf_gwas.tsv', 'hf')
+colocal('hypertension.tsv', 'hypertension')
+colocal('hypotension.tsv', 'hypotension')
+colocal('hf_gwas.tsv', 'hf')
+colocal('ischemic_stroke_gwas.tsv', 'ischemic_stroke')
+colocal('pe_gwas.tsv', 'pe')
+colocal('rhd_gwas.tsv', 'rhd')
+```
+
+## Block for running analysis on the DNAnexus platform
+```{r}
+#read in file to retrieve phenotype name
+system("dx download /Data/cmr_df.phe")
+
+
+colocal <- function(filename, cvd_type){
+  #load necessary libraries
+  library(data.table)
+  library(tidyverse)
+  
+  #upload files to workspace
+  system(paste0("dx download /Data/results/", filename))
+  
+  #read in file
+  cvd <- fread(filename, fill = TRUE, quote = "")
+
+#filter to only include snps with p-values below 10^-5
+cvd <- cvd %>% filter(p_value < 10^-6)
+
+# Perform filtering using dplyr
+filtered_ad_sig <- ad_sig %>%
+  inner_join(cvd, by = c("chr" = "chromosome")) %>% 
+  filter((pos - 50000) < base_pair_location & base_pair_location < (pos + 50000)) %>% 
+  distinct(chr, pos, base_pair_location, .keep_all = TRUE)
+
+#add label for cvd subtype
+if (nrow(filtered_ad_sig) > 0) {
+  filtered_ad_sig$CVD <- cvd_type
+} else {
+  message("filtered_ad_sig is empty; no assignment made.")
+}
+
+
+#write to results file
+write.table(filtered_ad_sig, "ad_cmr_gwas_colocalization.csv", sep = ",", col.names = FALSE, row.names = FALSE, append = TRUE)
+}
+```
+
+#generalized function for comparing AD UKB GWAS traits to diverse cardiac-related phenotypes
+```{r}
+colocal_general <- function(ukb_trait, sig_traits){
+  #load necessary libraries
+  library(tidyverse)
+  library(data.table)
+  
+  sig_ref<- read.table(paste0(sig_traits, ".tsv"), sep = '\t', quote = "", header = T)
+
+#save only chromosome numbers and position
+sig_ref <- data.frame(chr = as.numeric(sig_ref$CHR_ID), pos = as.numeric(sig_ref$CHR_POS), snp = sig_ref$SNPS, database_trait = sig_ref$MAPPED_TRAIT, p_value1 = sig_ref$P.VALUE)
+  
+  #read in file
+  ukb_gwas <- fread(paste0(ukb_trait, '.tsv'), fill = TRUE, quote = "")
+
+#filter to only include snps with p-values below 10^-6
+ukb_gwas <- ukb_gwas %>% filter(p_value < 10^-6)
+
+# Perform filtering using dplyr
+filtered_sig_ref <- sig_ref %>%
+  inner_join(ukb_gwas, by = c("chr" = "chromosome")) %>% 
+  filter((pos - 50000) < base_pair_location & base_pair_location < (pos + 50000)) %>% 
+  distinct(chr, pos, base_pair_location, .keep_all = TRUE)
+
+#add label for cvd subtype
+if (nrow(filtered_sig_ref) > 0) {
+  filtered_sig_ref$ukb_trait <- ukb_trait
+} else {
+  message("filtered_ad_sig is empty; no assignment made.")
+}
+
+
+#write to results file
+write.table(filtered_sig_ref, "heart_brain_colocalization.csv", sep = ",", col.names = FALSE, row.names = FALSE, append = TRUE)
+}
+```
+
+#run generalized function
+```{r}
+colocal_general('ad_gwas', 'cvd_child_traits')
+colocal_general('ad_gwas', 'dias_bp')
+colocal_general('ad_gwas', 'ekg')
+colocal_general('ad_gwas', 'heart_function')
+colocal_general('ad_gwas', 'heart_mri')
+colocal_general('ad_gwas', 'heart_rate')
+colocal_general('ad_gwas', 'heart_shape')
+colocal_general('ad_gwas', 'sys_bp')
+
+cvd_subtypes <- c('afib_gwas', 'albbb_gwas', 'ami_gwas', 'angina_gwas', 'ci1_gwas', 'ci2_gwas', 'hf_gwas', 'hypertension', 'hypotension', 'ischemic_stroke_gwas', 'pe_gwas', 'rhd_gwas')
+
+for(type in cvd_subtypes){
+  colocal_general(type, 'dementia_child_traits')
+}
+
+for(type in cvd_subtypes){
+  colocal_general(type, 'psych_disorders')
+}
+
+for(type in cvd_subtypes){
+  colocal_general(type, 'amyloid')
+}
+
+for(type in cvd_subtypes){
+  colocal_general(type, 'tau')
+}
+```
+
+##Filter and join results
+```{r}
+#read in results file
+df <- read.csv('heart_brain_colocalization.csv', header = F)
+
+df_select <- data.frame(chr = df$V1, catalog_pos = df$V2, catalog_snp = df$V3,
+                        calatog_trt = df$V4, catalog_p = df$V5, ukb_pos = df$V7,
+                        ukb_p = df$V16, ukb_trt = df$V19)
+
+#read in other results file from ukb
+df <- read.csv('ad_cmr_gwas_colocalization.csv', header = F)
+df_select_cmr <- data.frame(chr = df$V1, catalog_pos = df$V2, catalog_snp = df$V3,
+                        calatog_trt = df$V4, catalog_p = df$V5, ukb_pos = df$V7,
+                        ukb_p = df$V16, ukb_trt = df$V10)
+
+#rename with ukb field titles
+df_select_cmr$match <- find_substr_matches(field$field_id, df_select_cmr$ukb_trt)
+
+df_select_cmr <- df_select_cmr %>% left_join(., field[1:2], by = join_by(match==field_id)) %>% 
+  select(!c(match, ukb_trt)) %>% 
+  rename(ukb_trt = title)
+
+comb_df <- rbind(df_select, df_select_cmr)
+
+#save results to file
+write.csv(comb_df, 'heart_brain_coloc_comb.csv')
+```
+
+```{r}
+#read in significant snps file
+coloc <- read.csv('heart_brain_coloc_comb.csv', stringsAsFactors = T) %>% select(-X)
+
+
+#further filter by p-values
+coloc_p_filt <- coloc %>% filter((catalog_p < 5*10^-8) & (ukb_p < 5*10^-8))%>%
+  arrange(catalog_snp) 
+
+#keep only distinct pairings
+coloc_p_filt_pair <- coloc_p_filt %>% distinct(catalog_snp, ukb_pos)
+
+#extract notable SNPs
+important_snps <- coloc_p_filt %>% 
+  group_by(catalog_snp) %>% 
+  summarise(count = n(), 
+            catalog_traits = str_c(unique(calatog_trt), collapse = ", "),
+            ukb_traits = str_c(unique(ukb_trt), collapse = ", ")) %>% 
+  arrange(desc(count))
+write.csv(important_snps, "sig_coloc_snps.csv", row.names = F)
+
+#look at chromosomes/regions with the most hits
+tabs <- as.data.frame(table(coloc_p_filt_pair$catalog_snp, coloc_p_filt_pair$ukb_pos))
+(tabs_rep <- tabs %>% filter(Freq >= 1))
+write.table(tabs_rep, "AD_CVD_GWAS_Pairings.csv", row.names = F, col.names = T, sep = ',')
+
+#prepare dataframe for visualization
+coloc_p_filt$ukb_logp <- (-1)*log10(coloc_p_filt$ukb_p)
+coloc_p_filt$chr <- coloc_p_filt$chr#visualize
+coloc_p_filt$chr_pos_jitter <- coloc_p_filt$chr + coloc_p_filt$catalog_pos/10^8 - 0.5 + runif(length(coloc_p_filt$catalog_pos), -0.2, 0.2)
+
+library(RColorBrewer)
+  
+ggplot(coloc_p_filt, aes(x = chr_pos_jitter, y = ukb_logp, color = as.factor(chr))) +
+  geom_point(alpha = 0.25, size = 2) + 
+  scale_color_brewer(palette = "Dark2") + # Transparency for better visibility # Alternate colors+
+  scale_x_continuous(breaks = 1:22) +
+  labs(title = "Manhattan Plot of Significant Heart-Brain Colocalizations", x = "Genomic Position", y = "-log10(P-value)", color = 'Chromosome') + 
+  theme(panel.grid = element_blank())
+
+ggsave('coloc_manhattan.png')
+
+```
+

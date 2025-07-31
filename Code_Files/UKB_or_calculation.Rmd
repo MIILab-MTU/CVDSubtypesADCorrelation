@@ -1,0 +1,286 @@
+---
+title: "OR Calculations"
+author: "Aili Toyli"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Read in OR datafile and prepare variables for analysis
+```{r}
+#read in file
+cvd <- read.csv("C:/Users/agtoy/Desktop/URIP/UKB Cleaned Data/or_clean.csv")
+
+#clean dataframe
+cvd <- cvd %>% 
+  #remove unneeded columns
+  select(-c(eid, p41270)) %>% 
+  #label covariates for better readability
+  mutate(Age = p21003_i0,
+         Sex = factor(p31, labels = c('Female', 'Male')), 
+         `Age completed full time education` = p845_i0,
+         BMI = p21001_i0) %>% 
+  #Create readable smoking status levels
+  mutate(`Smoking Status` = factor(p20116_i0, labels = c('Prefer not to answer', 'Never', 'Previous', 'Current'))) %>% 
+  #Label all types of depression/bipolar as yesm no if otherwise
+  mutate(`Depression/Bipolar Disorder` = factor(p20126_i0, labels = c('No', rep('Yes', 5)))) %>%
+  #Replace non response encodings from physical activity data with NA
+  mutate(`Days of moderate physical activity each week` = replace(p884_i0, p884_i0 %in% c(-1, -3), NA)) %>% 
+  mutate(`Days of vigorous physical activity each week` = replace(p904_i0, p904_i0 %in% c(-1, -3), NA)) %>% 
+  #Label alcohol consumption levels
+  mutate(`Alcohol Consumption` = factor(p1558_i0, labels = c('Daily or almost daily', '3-4 times a week', '1-2 times a week', '1-3 times a month', 'Special occasions only', 'Never', 'Prefer not to answer'))) %>% 
+  #Label annual income levels
+  mutate(`Annual Household Income` = factor(p738_i0, labels = c('<£18,000', '£18,000-£30,999', '£31,000-£51,999', '£52,000-£100,000', '>£100,000', 'Do not know', 'Prefer not to answer'))) %>% 
+  #Save diabetes status as factor
+  mutate(Diabetes = factor(Diabetes, labels = c('No', 'Yes'))) %>% 
+  #Replace spelling error on afib
+  rename(Atrial.Fibrillation = Atrial.Fibriliation) %>% 
+  #Reorder columns to have AD followed by CVD, then covariates
+  select(Alzheimers.Disease, Hypertension, Hypotension, Angina.Pectoris, 
+         Acute.Myocardial.Infarction, Pulmonary.Embolism, Atrial.Fibrillation,
+         Heart.Failure, Blockage, Chronic.Rheumatic.Heart.Disease, 
+         Chronic.Ischemic.Heart.Disease, Cerebral.Infarction, everything())
+
+
+#Adjust ethnicity encodings to be more generalized
+cvd$`Ethnic background` <- as.character(cvd$p21000_i0)
+cvd$`Ethnic background` <- ifelse(startsWith(cvd$`Ethnic background`, '1'), 'White',
+                                  ifelse(startsWith(cvd$`Ethnic background`, '2'), 'Mixed',
+                                         ifelse(startsWith(cvd$`Ethnic background`, '3'), 'Asian',
+                                                ifelse(startsWith(cvd$`Ethnic background`, '4'), 'Black',
+                                                       ifelse(cvd$`Ethnic background`=='5', 'Chinese',
+                                                              ifelse(cvd$`Ethnic background`=='6', 'Other',
+                                                                     ifelse(cvd$`Ethnic background`=='-3', 'Prefer not to answer',
+                                                                            'Unknown')))))))
+
+#drop original columns containing covariate data
+cvd<- cvd %>% select(-matches("^p[0-9]+"))
+
+#categorize ethnic background as a factor variable
+cvd$`Ethnic background` <- factor(cvd$`Ethnic background`)
+
+#Impute missing categorical data as "Prefer not to answer"
+cvd <- cvd %>% mutate(across(where(is.factor), ~ {
+    fct <- .
+    # Add the level if not already present
+    if (!"Prefer not to answer" %in% levels(fct)) {
+      levels(fct) <- c(levels(fct), "Prefer not to answer")
+    }
+    # Replace NA with the new level
+    fct[is.na(fct)] <- "Prefer not to answer"
+    fct
+  })) %>% 
+    #Impute missing numeric data with median
+    mutate(across(where(is.numeric), ~ replace(., is.na(.), median(., na.rm = TRUE))))
+```
+
+##Get total counts of AD and CVD subtypes
+```{r}
+#Extract disease codes
+cvd_icd  <- cvd[,1:12]
+
+#apply sum function to each column
+lapply(cvd_icd, sum)
+```
+
+##Perform Crosstabs on AD and CVD Counts
+```{r}
+library(dplyr)
+
+# Save variables of interest 
+vars <- names(cvd)[2:12]
+
+# Build the results
+results_list <- lapply(vars, function(var) {
+  tmp <- table(cvd[[var]], cvd$Alzheimers.Disease)
+  
+  # Make sure tmp is a data.frame
+  tmp_df <- as.data.frame.matrix(tmp)
+  
+  # Add the TRUE/FALSE label from the rownames
+  tmp_df$CVD_status <- rownames(tmp_df)
+  
+  tmp_df$CVD_subtype <- var
+  
+  tmp_df
+})
+
+# Combine all
+combined <- bind_rows(results_list)
+
+# Arrange to have nice columns
+combined <- combined %>%
+  select(CVD_subtype, CVD_status, everything()) %>%
+  rename(AD_No = `FALSE`, AD_Yes = `TRUE`)   # assuming Alzheimer's Disease is also logical
+
+# Calculate totals and percentages
+final_table <- combined %>%
+  mutate(
+    Total = AD_No + AD_Yes,
+    Percent_AD_No = paste0(AD_No, " (", round(AD_No / Total * 100, 1), "%)"),
+    Percent_AD_Yes = paste0(AD_Yes, " (", round(AD_Yes / Total * 100, 1), "%)"),
+    CVD_status = paste0(ifelse(CVD_status, 'Yes', 'No'), " ", AD_No + AD_Yes)
+  ) %>%
+  select(CVD_subtype, CVD_status, Percent_AD_No, Percent_AD_Yes)
+
+final_table
+
+#write output table
+write.csv(final_table, 'C:/Users/agtoy/Desktop/URIP/Results/ad_cvd_crosstabs.csv')
+```
+
+##Get summary statistics on covariates
+I utilized this to create the table 1 for my paper. Numeric variables are summarized by their mean and standard deviation, and categorical variables are summarized by the count and percentage at each level. Additionally, the count and percentage of NA values for a given variable are returned.
+
+```{r}
+summarize_dataframe <- function(df) {
+  results <- list()
+  
+  for (colname in names(df)) {
+    column <- df[[colname]]
+    
+    if (is.numeric(column)) {
+      # Mean and SD
+      col_mean <- mean(column, na.rm = TRUE)
+      col_sd <- sd(column, na.rm = TRUE)
+      summary_text <- sprintf("%.2f (%.2f)", col_mean, col_sd)
+      
+      total <- length(column)
+      na_count <- sum(is.na(column))
+      na_percent <- (na_count / total) * 100
+      na_text <- sprintf("%d (%.1f%%)", na_count, na_percent)
+      
+      results[[paste0(colname, "_summary")]] <- data.frame(
+        Variable = colname,
+        Level = "Mean (SD)",
+        Summary = summary_text,
+        stringsAsFactors = FALSE
+      )
+      
+      results[[paste0(colname, "_na")]] <- data.frame(
+        Variable = colname,
+        Level = "NA",
+        Summary = na_text,
+        stringsAsFactors = FALSE
+      )
+      
+    } else if (is.factor(column) || is.character(column) || is.logical(column)) {
+      counts <- table(column, useNA = "ifany")
+      percents <- prop.table(counts) * 100
+      
+      cat_df <- data.frame(
+        Variable = colname,
+        Level = names(counts),
+        Summary = sprintf("%d (%.1f%%)", as.integer(counts), round(percents, 1)),
+        stringsAsFactors = FALSE
+      )
+      
+      results[[colname]] <- cat_df
+    }
+  }
+  
+  # Combine to a single data frame
+  summary_df <- do.call(rbind, results)
+  rownames(summary_df) <- NULL
+  
+  return(summary_df)
+}
+
+# Example usage:
+covars <- summarize_dataframe(cvd[13:24])
+View(covars)
+
+#generate summary for participants with AD
+covars_ad <- cvd[cvd$Alzheimers.Disease == TRUE,]
+covars_ad <- summarize_dataframe(covars_ad[13:24])
+
+#generate summary for participants without AD
+covars_no_ad <- cvd[cvd$Alzheimers.Disease == FALSE,]
+covars_no_ad <- summarize_dataframe(covars_no_ad[13:24])
+
+#join summaries together into 1 dataframe
+joined_covars <- covars %>% 
+  full_join(covars_ad, by = c('Variable', 'Level')) %>% 
+  full_join(covars_no_ad, by = c('Variable', 'Level'))
+
+#write to excel file
+write.csv(joined_covars, 'C:/Users/agtoy/Desktop/URIP/Results/ad_covar_summary.csv', row.names = F)
+```
+
+## Code for OR calculation
+```{r}
+  #cvd data frame should have alzheimers in first column, then cvd subtypes
+  #make sure eid is removed
+  #some of the index numbers would need to be adjusted if looking at a different number of subtypes
+
+  #create empty dataframe to store results
+  output <- data.frame(cvd = character(11), est = numeric(11), 
+                       lower.lim = numeric(11), upper.lim = numeric(11))
+  
+  #run regression for each subtype
+  for(i in 1:11){
+    #put name of disease in output dataframe
+    output$cvd[i] <- names(cvd)[i+1]
+    
+    #save formula
+    formula <- as.formula(paste0('`', names(cvd)[1], '` ~ `', names(cvd)[i+1], '` + ',
+         paste(paste0('`', names(cvd)[13:ncol(cvd)], '`'), collapse = ' + '))
+)
+    
+    #run regression
+    mylogit <- glm(formula, family = 'binomial', data = cvd)
+    
+    #save logistic regression summary
+    sum_mylogit <- summary(mylogit)
+    
+    #save odds ratio and confidence interval
+    or_confint <- exp(cbind(OR = sum_mylogit$coefficients[2, 1], 
+                            LL = sum_mylogit$coefficients[2, 1] 
+                              - 1.96 * sum_mylogit$coefficients[2, 2],
+                            UL = sum_mylogit$coefficients[2, 1] 
+                              + 1.96 * sum_mylogit$coefficients[2, 2]))
+
+    
+    #save in output table
+    output[i, 2] <- or_confint[1, 1]
+    output[i, 3] <- or_confint[1, 2]
+    output[i, 4] <- or_confint[1, 3]
+    
+  }
+    
+    #visualize with a forest plot
+    plot <- ggplot(output, aes(x = reorder(cvd, est), y = est)) +
+  geom_point(shape = 21, fill = "blue", size = 5) +
+  geom_errorbar(aes(ymin = lower.lim, ymax = upper.lim), width = 0.15, linewidth = 0.75, color = 'black') +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  annotate("text", x = 10.35, y = 1.52, label = "Significance\nThreshold  ", 
+           vjust = -0.5, hjust = 0.95, color = "red", size = 5) +  
+  coord_flip() +
+  labs(x = "CVD Subtype", y = "Odds Ratio (95% CI)", 
+       title = "Forest Plot of Odds Ratios\nfor AD with CVD Subtypes",
+       subtitle = 'UK Biobank Cohort')+
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 16),
+        plot.title = element_text(hjust = 0.5, size = 30),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title = element_text(size = 20),
+        legend.text= element_text(size = 12),
+        legend.title = element_text(size = 20),
+        panel.background = element_rect(fill = "white"))
+    
+    plot
+    
+    #save plot
+    ggsave('C:/Users/agtoy/Desktop/URIP/Results/or_plot_UKB.png', plot = plot,
+           width = 9, height = 9)
+    
+    #save datafile
+    write.csv(output, 'C:/Users/agtoy/Desktop/URIP/Results/or_results.csv')
+    
+    #read in file to access results later
+    output <- read.csv('C:/Users/agtoy/Desktop/URIP/Results/or_results.csv')
+
+```
